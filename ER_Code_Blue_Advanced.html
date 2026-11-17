@@ -1,0 +1,1597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ER Code Blue Advanced: Critical Care Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #070b14;
+            --panel-bg: #0f172a;
+            --border-color: #1e293b;
+            --ecg-green: #10b981;
+            --spo2-cyan: #06b6d4;
+            --bp-amber: #f59e0b;
+            --danger-red: #ef4444;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: #f8fafc;
+            overflow-x: hidden;
+            user-select: none;
+        }
+
+        .font-mono-med {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Emergency Red Strobe Overlay */
+        @keyframes emergencyPulse {
+            0%, 100% {
+                box-shadow: inset 0 0 0px rgba(239, 68, 68, 0);
+                border-color: #1e293b;
+            }
+            50% {
+                box-shadow: inset 0 0 45px rgba(239, 68, 68, 0.45);
+                border-color: #ef4444;
+            }
+        }
+
+        @keyframes strobeBanner {
+            0%, 100% { background-color: rgba(185, 28, 28, 0.9); transform: scale(1); }
+            50% { background-color: rgba(239, 68, 68, 1); transform: scale(1.01); }
+        }
+
+        .emergency-active {
+            animation: emergencyPulse 0.9s infinite ease-in-out;
+        }
+
+        .banner-strobe {
+            animation: strobeBanner 0.6s infinite ease-in-out;
+        }
+
+        /* Custom Medical Tool Button Styling */
+        .med-tool-btn {
+            background: linear-gradient(145deg, #1e293b, #0f172a);
+            border: 1px solid #334155;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .med-tool-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            border-color: #38bdf8;
+            box-shadow: 0 8px 15px -3px rgba(56, 189, 248, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        }
+
+        .med-tool-btn:active:not(:disabled) {
+            transform: translateY(1px) scale(0.98);
+        }
+
+        .med-tool-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        /* CRT Grid Overlay for ECG Monitor */
+        .ecg-grid {
+            background-size: 20px 20px;
+            background-image: 
+                linear-gradient(to right, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(16, 185, 129, 0.08) 1px, transparent 1px);
+        }
+
+        /* Cooldown Progress Bar */
+        .cooldown-bar {
+            transition: width 0.1s linear;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between p-2 sm:p-4">
+
+    <!-- Top Hospital Telemetry Header -->
+    <header class="w-full max-w-6xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-3 sm:px-6 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/50 flex items-center justify-center text-red-400">
+                <!-- Medical Cross SVG -->
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-base sm:text-lg font-extrabold tracking-tight text-white flex items-center gap-2">
+                    TRAUMA BAY 01
+                    <span id="shift-badge" class="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">STANDBY</span>
+                </h1>
+                <p class="text-xs text-slate-400">ICU Telemetry & Resuscitation Unit</p>
+            </div>
+        </div>
+
+        <!-- Shift Metrics -->
+        <div class="flex items-center gap-3 sm:gap-6">
+            <div class="text-center">
+                <div class="text-[10px] uppercase tracking-wider text-slate-400">Shift Timer</div>
+                <div id="shift-timer" class="font-mono-med text-lg sm:text-xl font-bold text-white">02:00</div>
+            </div>
+            <div class="h-8 w-px bg-slate-800"></div>
+            <div class="text-center">
+                <div class="text-[10px] uppercase tracking-wider text-slate-400">Saved</div>
+                <div id="patients-saved" class="font-mono-med text-lg sm:text-xl font-bold text-emerald-400">0</div>
+            </div>
+            <div class="h-8 w-px bg-slate-800"></div>
+            <div class="text-center">
+                <div class="text-[10px] uppercase tracking-wider text-slate-400">Score <span id="multiplier-badge" class="text-amber-400 font-bold">1.0x</span></div>
+                <div id="score-display" class="font-mono-med text-lg sm:text-xl font-bold text-sky-400">0</div>
+            </div>
+        </div>
+
+        <!-- Audio & Alarm Controls -->
+        <div class="flex items-center gap-2">
+            <button id="ack-alarm-btn" onclick="acknowledgeAlarm()" class="hidden px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/60 text-amber-300 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition shadow-lg">
+                <svg class="w-4 h-4 animate-bounce" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                Silence Alarm
+            </button>
+
+            <button id="mute-toggle-btn" onclick="toggleMute()" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition">
+                <span id="mute-icon">🔊</span>
+                <span id="mute-text" class="hidden sm:inline">Audio On</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main ICU Workstation -->
+    <main id="main-monitor-frame" class="w-full max-w-6xl mx-auto my-3 flex-1 bg-slate-900/80 border-2 border-slate-800 rounded-3xl p-3 sm:p-6 flex flex-col justify-between gap-4 relative overflow-hidden transition-all">
+        
+        <!-- Critical Alert Banner -->
+        <div id="alert-banner" class="hidden w-full rounded-xl py-2 px-4 text-center font-mono-med font-extrabold text-sm sm:text-base tracking-widest uppercase text-white banner-strobe shadow-lg flex items-center justify-center gap-3">
+            <span>⚠️</span>
+            <span id="alert-banner-text">CODE BLUE — CRITICAL VITALS DETECTED</span>
+            <span>⚠️</span>
+        </div>
+
+        <!-- Patient Intake & Case Description Bar -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+            <!-- Patient Chart -->
+            <div class="lg:col-span-2 bg-slate-950/90 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
+                <div class="flex flex-wrap items-start justify-between gap-2 border-b border-slate-800/80 pb-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span id="patient-id" class="font-mono-med text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300">PT-#000</span>
+                            <h2 id="patient-name" class="text-lg sm:text-xl font-bold text-white">Awaiting Incoming Ambulance...</h2>
+                        </div>
+                        <p id="patient-condition" class="text-xs sm:text-sm font-semibold text-rose-400 mt-1">Diagnosis: Standby</p>
+                    </div>
+                    <!-- Patient Survival Countdown -->
+                    <div class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-right">
+                        <div class="text-[10px] uppercase tracking-wider text-slate-400">Critical Window</div>
+                        <div id="patient-timer" class="font-mono-med text-xl sm:text-2xl font-extrabold text-amber-400">--.-s</div>
+                    </div>
+                </div>
+
+                <!-- Clinical Symptoms & Doctor Feedback -->
+                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="bg-slate-900/70 rounded-xl p-3 border border-slate-800/80">
+                        <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Presenting Symptoms</div>
+                        <p id="patient-symptoms" class="text-xs sm:text-sm text-slate-200 leading-relaxed">
+                            Press "Start ER Shift" to begin advanced emergency simulation.
+                        </p>
+                    </div>
+                    <div class="bg-slate-900/70 rounded-xl p-3 border border-slate-800/80 flex flex-col justify-between">
+                        <div>
+                            <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Required Stabilization</div>
+                            <div id="treatment-checklist" class="flex flex-wrap gap-1.5 mt-1">
+                                <span class="text-xs text-slate-500 italic">No active orders</span>
+                            </div>
+                        </div>
+                        <div id="feedback-toast" class="mt-2 text-xs font-medium text-sky-400 min-h-[18px]">
+                            Monitor ready. Audio synthesis initialized on start.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Vitals Numeric Readout -->
+            <div class="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 grid grid-cols-3 lg:grid-cols-1 gap-2 sm:gap-3">
+                <!-- Heart Rate (BPM) -->
+                <div id="card-hr" class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 sm:p-3 flex flex-col justify-between">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-emerald-400">HR (BPM)</span>
+                        <span id="hr-heart-icon" class="text-emerald-400 text-xs">♥</span>
+                    </div>
+                    <div id="vital-hr" class="font-mono-med text-2xl sm:text-4xl font-extrabold text-emerald-400 tracking-tight my-0.5">--</div>
+                    <div id="hr-status" class="text-[10px] text-slate-400">Normal: 60-100</div>
+                </div>
+
+                <!-- SpO2 (%) -->
+                <div id="card-spo2" class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 sm:p-3 flex flex-col justify-between">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-cyan-400">SpO2 (%)</span>
+                        <span class="text-cyan-400 text-xs">O₂</span>
+                    </div>
+                    <div id="vital-spo2" class="font-mono-med text-2xl sm:text-4xl font-extrabold text-cyan-400 tracking-tight my-0.5">--</div>
+                    <div id="spo2-status" class="text-[10px] text-slate-400">Normal: 95-100%</div>
+                </div>
+
+                <!-- Blood Pressure (mmHg) -->
+                <div id="card-bp" class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 sm:p-3 flex flex-col justify-between">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-amber-400">NIBP (mmHg)</span>
+                        <span class="text-amber-400 text-xs">BP</span>
+                    </div>
+                    <div id="vital-bp" class="font-mono-med text-xl sm:text-3xl font-extrabold text-amber-400 tracking-tight my-0.5">---/--</div>
+                    <div id="bp-status" class="text-[10px] text-slate-400">Normal: 120/80</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live ECG Waveform Canvas -->
+        <div class="w-full bg-slate-950 border border-slate-800 rounded-2xl p-2 sm:p-3 relative ecg-grid">
+            <div class="flex items-center justify-between text-[10px] font-mono-med text-emerald-500/80 px-2 mb-1">
+                <span>LEAD II — 25mm/s</span>
+                <span id="ecg-rhythm-label">RHYTHM: STANDBY</span>
+            </div>
+            <div class="w-full h-28 sm:h-36 relative">
+                <canvas id="ecg-canvas" class="w-full h-full block rounded-lg"></canvas>
+            </div>
+        </div>
+
+        <!-- Interactive Medical Treatment Deck (Outside Canvas) -->
+        <div class="bg-slate-950/90 border border-slate-800 rounded-2xl p-3 sm:p-4">
+            <div class="flex items-center justify-between mb-2.5">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Emergency Crash Cart & Interventions</span>
+                <span class="text-[11px] text-slate-400 hidden sm:inline">Select safe interventions in the correct clinical sequence</span>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
+                <!-- Tool 1: Defibrillator -->
+                <button onclick="applyTreatment('defib')" id="btn-defib" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">Defibrillator</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Reset Arrest / VF</span>
+                </button>
+
+                <!-- Tool 2: Oxygen Mask -->
+                <button onclick="applyTreatment('oxygen')" id="btn-oxygen" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">O₂ High-Flow</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Boost Low SpO2</span>
+                </button>
+
+                <!-- Tool 3: IV Fluids -->
+                <button onclick="applyTreatment('iv')" id="btn-iv" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">IV Saline Drip</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Restore Low BP</span>
+                </button>
+
+                <!-- Tool 4: Adrenaline / Epinephrine -->
+                <button onclick="applyTreatment('epi')" id="btn-epi" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">Epinephrine</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Cardiac / Shock</span>
+                </button>
+
+                <!-- Tool 5: Trauma Kit / Bandage -->
+                <button onclick="applyTreatment('trauma')" id="btn-trauma" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-orange-500/20 text-orange-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">Trauma Kit</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Stop Bleeding</span>
+                </button>
+
+                <!-- Tool 6: IV Antibiotics / Sedative -->
+                <button onclick="applyTreatment('antibiotics')" id="btn-antibiotics" disabled class="med-tool-btn rounded-xl p-3 flex flex-col items-center text-center relative overflow-hidden">
+                    <div class="w-9 h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-1.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xs font-bold text-white">Antibiotics</span>
+                    <span class="text-[10px] text-slate-400 mt-0.5">Sepsis / Fever</span>
+                </button>
+            </div>
+        </div>
+
+        
+<!-- Advanced simulation configuration -->
+<section class="bg-slate-950/90 border border-slate-800 rounded-2xl p-3 sm:p-4" id="advanced-panel">
+ <div class="flex flex-wrap items-center justify-between gap-3 mb-3"><div><h3 class="text-xs font-bold uppercase tracking-wider text-slate-200">Advanced Clinical Simulation</h3><p class="text-[11px] text-slate-400">Educational only • Simplified protocols • No medication dosing</p></div><div class="flex items-center gap-2"><label class="text-xs text-slate-400" for="difficulty">Difficulty</label><select id="difficulty" class="bg-slate-800 text-white border border-slate-600 rounded-lg p-2 text-xs"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></div></div>
+ <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5" id="advanced-tools">
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-cpr" onclick="applyTreatment('cpr')" disabled><div class="text-xl mb-1">🫀</div><div class="text-xs font-bold">High-quality CPR</div><div class="text-[10px] text-slate-400">Arrest response</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-airway" onclick="applyTreatment('airway')" disabled><div class="text-xl mb-1">🫁</div><div class="text-xs font-bold">Airway / BVM</div><div class="text-[10px] text-slate-400">Ventilation</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-monitor" onclick="applyTreatment('monitor')" disabled><div class="text-xl mb-1">📈</div><div class="text-xs font-bold">Assess Rhythm</div><div class="text-[10px] text-slate-400">Pulse / ECG</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-amio" onclick="applyTreatment('amio')" disabled><div class="text-xl mb-1">💉</div><div class="text-xs font-bold">Antiarrhythmic</div><div class="text-[10px] text-slate-400">Refractory VF/pVT</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-glucose" onclick="applyTreatment('glucose')" disabled><div class="text-xl mb-1">🍬</div><div class="text-xs font-bold">Check / Treat Glucose</div><div class="text-[10px] text-slate-400">Hypoglycaemia</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-blood" onclick="applyTreatment('blood')" disabled><div class="text-xl mb-1">🩸</div><div class="text-xs font-bold">Blood Products</div><div class="text-[10px] text-slate-400">Major haemorrhage</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-pressor" onclick="applyTreatment('pressor')" disabled><div class="text-xl mb-1">💊</div><div class="text-xs font-bold">Vasopressor</div><div class="text-[10px] text-slate-400">Persistent shock</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-ecg12" onclick="applyTreatment('ecg12')" disabled><div class="text-xl mb-1">📋</div><div class="text-xs font-bold">12-lead ECG</div><div class="text-[10px] text-slate-400">Cardiac evaluation</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-reperfuse" onclick="applyTreatment('reperfuse')" disabled><div class="text-xl mb-1">🏥</div><div class="text-xs font-bold">Urgent Referral / PCI</div><div class="text-[10px] text-slate-400">Definitive care</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-antidote" onclick="applyTreatment('antidote')" disabled><div class="text-xl mb-1">🧪</div><div class="text-xs font-bold">Specific Antidote</div><div class="text-[10px] text-slate-400">Toxin-directed</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-broncho" onclick="applyTreatment('broncho')" disabled><div class="text-xl mb-1">🌬️</div><div class="text-xs font-bold">Bronchodilator</div><div class="text-[10px] text-slate-400">Bronchospasm</div></button>
+ <button class="med-tool-btn rounded-xl p-3 text-center" id="btn-special" onclick="applyTreatment('special')" disabled><div class="text-xl mb-1">🚑</div><div class="text-xs font-bold">Targeted Procedure</div><div class="text-[10px] text-slate-400">Case-specific</div></button>
+ </div>
+ <div class="mt-3 flex flex-wrap items-center gap-3"><label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" id="show-hints" checked class="accent-emerald-500"> Show treatment hints (Easy / Medium)</label><span id="case-count" class="text-[11px] text-sky-400">24 scenario library</span></div>
+</section>
+
+        <!-- Start / Summary Modal Overlay -->
+        <div id="overlay-screen" class="absolute inset-0 bg-slate-950/92 backdrop-blur-md z-20 flex items-center justify-center p-4">
+            <div class="max-w-lg w-full bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 text-center shadow-2xl">
+                <div id="overlay-badge" class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 text-xs font-bold uppercase tracking-wider mb-4">
+                    <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+                    Emergency Department Simulation
+                </div>
+                <h2 id="overlay-title" class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                    ER CODE BLUE
+                </h2>
+                <p id="overlay-desc" class="text-sm text-slate-300 mt-3 leading-relaxed">
+                    Advanced educational scenarios: choose safe actions in sequence. Incoming critical patients require immediate stabilization. Monitor live ECG telemetry, SpO2, and Blood Pressure, respond to hospital alarms, and administer the right treatments before the critical window expires.
+                </p>
+
+                <!-- End of Shift Stats (Hidden initially) -->
+                <div id="summary-stats" class="hidden grid grid-cols-3 gap-3 my-6 bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
+                    <div>
+                        <div class="text-[11px] uppercase text-slate-400">Saved</div>
+                        <div id="final-saved" class="font-mono-med text-2xl font-extrabold text-emerald-400">0</div>
+                    </div>
+                    <div>
+                        <div class="text-[11px] uppercase text-slate-400">Lost</div>
+                        <div id="final-lost" class="font-mono-med text-2xl font-extrabold text-rose-400">0</div>
+                    </div>
+                    <div>
+                        <div class="text-[11px] uppercase text-slate-400">Final Score</div>
+                        <div id="final-score" class="font-mono-med text-2xl font-extrabold text-sky-400">0</div>
+                    </div>
+                </div>
+
+<div id="advanced-report" class="hidden mt-4 max-h-56 overflow-y-auto text-left text-xs bg-slate-950 border border-slate-700 rounded-xl p-3"><div class="font-bold text-sky-300 mb-2">Clinical performance review</div><div id="report-body" class="space-y-2 text-slate-300"></div></div>
+                <div class="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <button id="start-game-btn" onclick="startShift()" class="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-sm uppercase tracking-wider shadow-lg shadow-red-600/30 transition transform hover:scale-105 active:scale-95">
+                        Start ER Shift (Audio Active)
+                    </button>
+                </div>
+                <p class="text-[11px] text-slate-500 mt-4">
+                    Uses real-time Web Audio API synthesis for ECG beeps, Code Blue sirens, and flatline tones.
+                </p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Bottom Status Footer -->
+    <footer class="w-full max-w-6xl mx-auto text-center text-[11px] text-slate-500 py-1">
+        EDUCATIONAL SIMULATION — NOT FOR CLINICAL DECISIONS • KEYBOARD SHORTCUTS: [1] DEFIB • [2] O₂ • [3] IV • [4] EPI • [5] TRAUMA • [6] ANTIBIOTICS • [SPACE] SILENCE ALARM
+    </footer>
+
+    <script>
+        /**
+         * ============================================================================
+         * WEB AUDIO API HOSPITAL ALARM & TELEMETRY SYNTHESIZER
+         * Generates realistic ECG pulse pips, tachycardia warnings, flatline asystole
+         * tones, Code Blue two-tone klaxons, defibrillator charge/discharge, and timer alerts.
+         * ============================================================================
+         */
+        class HospitalAudioEngine {
+            constructor() {
+                this.ctx = null;
+                this.isMuted = false;
+                this.alarmSilenced = false;
+                this.flatlineOsc = null;
+                this.flatlineGain = null;
+                this.codeBlueInterval = null;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            setMute(muted) {
+                this.isMuted = muted;
+                if (muted) {
+                    this.stopAllContinuousAlarms();
+                }
+            }
+
+            silenceCurrentAlarm() {
+                this.alarmSilenced = true;
+                this.stopAllContinuousAlarms();
+            }
+
+            stopAllContinuousAlarms() {
+                if (this.flatlineOsc) {
+                    try {
+                        this.flatlineOsc.stop();
+                        this.flatlineOsc.disconnect();
+                    } catch (e) {}
+                    this.flatlineOsc = null;
+                    this.flatlineGain = null;
+                }
+                if (this.codeBlueInterval) {
+                    clearInterval(this.codeBlueInterval);
+                    this.codeBlueInterval = null;
+                }
+            }
+
+            // Standard ECG R-wave QRS pulse beep (pitched by SpO2 level like real pulse oximeters)
+            playHeartbeatPip(spo2 = 98, isCritical = false) {
+                if (this.isMuted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                // Real pulse oximeters drop pitch as SpO2 drops
+                const baseFreq = isCritical ? 980 : Math.max(420, 500 + (spo2 - 70) * 14);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(baseFreq, now);
+
+                gain.gain.setValueAtTime(0.001, now);
+                gain.gain.exponentialRampToValueAtTime(isCritical ? 0.16 : 0.09, now + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.09);
+            }
+
+            // Continuous Asystole / Flatline tone
+            startFlatline() {
+                if (this.isMuted || this.alarmSilenced || !this.ctx || this.flatlineOsc) return;
+                const now = this.ctx.currentTime;
+                this.flatlineOsc = this.ctx.createOscillator();
+                this.flatlineGain = this.ctx.createGain();
+
+                this.flatlineOsc.type = 'sine';
+                this.flatlineOsc.frequency.setValueAtTime(880, now);
+
+                this.flatlineGain.gain.setValueAtTime(0.001, now);
+                this.flatlineGain.gain.exponentialRampToValueAtTime(0.14, now + 0.05);
+
+                this.flatlineOsc.connect(this.flatlineGain);
+                this.flatlineGain.connect(this.ctx.destination);
+                this.flatlineOsc.start(now);
+            }
+
+            // Code Blue Two-Tone Hospital Klaxon Alarm
+            startCodeBlueAlarm() {
+                if (this.isMuted || this.alarmSilenced || !this.ctx || this.codeBlueInterval) return;
+
+                const triggerChime = () => {
+                    if (this.isMuted || this.alarmSilenced || !this.ctx) return;
+                    const now = this.ctx.currentTime;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(784, now); // G5
+                    osc.frequency.setValueAtTime(622.25, now + 0.22); // Eb5
+
+                    gain.gain.setValueAtTime(0.001, now);
+                    gain.gain.linearRampToValueAtTime(0.16, now + 0.03);
+                    gain.gain.setValueAtTime(0.16, now + 0.42);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.5);
+                };
+
+                triggerChime();
+                this.codeBlueInterval = setInterval(triggerChime, 950);
+            }
+
+            // Urgent Countdown Tick (< 6 seconds remaining)
+            playUrgentTimerBeep() {
+                if (this.isMuted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(1150, now);
+
+                gain.gain.setValueAtTime(0.001, now);
+                gain.gain.linearRampToValueAtTime(0.07, now + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.08);
+            }
+
+            // Defibrillator Charge & Shock Discharge Sound
+            playDefibShock() {
+                if (this.isMuted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.exponentialRampToValueAtTime(1400, now + 0.18);
+                osc.frequency.exponentialRampToValueAtTime(90, now + 0.35);
+
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.38);
+            }
+
+            // Positive Treatment / Stabilization Chime
+            playSuccessChime(isFullSave = false) {
+                if (this.isMuted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const notes = isFullSave ? [523.25, 659.25, 783.99, 1046.5] : [587.33, 880];
+                notes.forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.07);
+                    gain.gain.setValueAtTime(0.001, now + idx * 0.07);
+                    gain.gain.linearRampToValueAtTime(0.12, now + idx * 0.07 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.07 + 0.22);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now + idx * 0.07);
+                    osc.stop(now + idx * 0.07 + 0.24);
+                });
+            }
+
+            // Wrong Treatment Error Buzz
+            playErrorBuzz() {
+                if (this.isMuted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(145, now);
+                gain.gain.setValueAtTime(0.14, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.24);
+            }
+        }
+
+        const audioEngine = new HospitalAudioEngine();
+
+        /**
+         * ============================================================================
+         * PATIENT CASE LIBRARY & CLINICAL SIMULATION DATA
+         * ============================================================================
+         */
+        const TOOL_LABELS = {
+            defib: 'Defibrillator',
+            oxygen: 'O₂ High-Flow',
+            iv: 'IV Saline Drip',
+            epi: 'Epinephrine',
+            trauma: 'Trauma Kit',
+            antibiotics: 'Antibiotics', cpr:'High-quality CPR', airway:'Airway / BVM', monitor:'Rhythm & pulse assessment', amio:'Antiarrhythmic', glucose:'Glucose assessment / correction', blood:'Blood products', pressor:'Vasopressor', ecg12:'12-lead ECG', reperfuse:'Urgent PCI referral', antidote:'Targeted antidote', broncho:'Bronchodilator', special:'Targeted definitive intervention'
+        };
+
+        const CASE_TEMPLATES = [
+    {
+        "condition": "Ventricular fibrillation cardiac arrest",
+        "symptoms": "Unresponsive, pulseless; chaotic VF rhythm. Activate resuscitation team.",
+        "hr": 0,
+        "spo2": 76,
+        "sys": 0,
+        "dia": 0,
+        "rhythm": "VFIB",
+        "required": [
+            "cpr",
+            "monitor",
+            "defib",
+            "epi",
+            "amio"
+        ],
+        "timeLimit": 65,
+        "isCodeBlue": true,
+        "teaching": "Shockable arrest: CPR, prompt defibrillation and rhythm reassessment; epinephrine and antiarrhythmic in refractory cycles."
+    },
+    {
+        "condition": "Pulseless ventricular tachycardia",
+        "symptoms": "Unresponsive, pulseless, broad-complex rapid ventricular rhythm.",
+        "hr": 0,
+        "spo2": 79,
+        "sys": 0,
+        "dia": 0,
+        "rhythm": "PVT",
+        "required": [
+            "cpr",
+            "monitor",
+            "defib",
+            "epi",
+            "amio"
+        ],
+        "timeLimit": 65,
+        "isCodeBlue": true,
+        "teaching": "Pulseless VT is shockable; continue CPR and follow the shockable arrest pathway."
+    },
+    {
+        "condition": "Asystolic cardiac arrest",
+        "symptoms": "Unresponsive, no pulse, flatline verified in two leads.",
+        "hr": 0,
+        "spo2": 0,
+        "sys": 0,
+        "dia": 0,
+        "rhythm": "ASYSTOLE",
+        "required": [
+            "cpr",
+            "monitor",
+            "epi",
+            "airway"
+        ],
+        "timeLimit": 65,
+        "isCodeBlue": true,
+        "teaching": "Asystole is NOT shockable; CPR, epinephrine, ventilation and reversible-cause evaluation."
+    },
+    {
+        "condition": "Pulseless electrical activity",
+        "symptoms": "Organised ECG activity but no palpable pulse.",
+        "hr": 0,
+        "spo2": 0,
+        "sys": 0,
+        "dia": 0,
+        "rhythm": "PEA",
+        "required": [
+            "cpr",
+            "monitor",
+            "epi",
+            "airway"
+        ],
+        "timeLimit": 65,
+        "isCodeBlue": true,
+        "teaching": "PEA is NOT shockable; prioritize CPR, epinephrine and reversible causes."
+    },
+    {
+        "condition": "Acute hypoxaemic respiratory failure",
+        "symptoms": "Severe respiratory distress, cyanosis and falling oxygen saturation.",
+        "hr": 140,
+        "spo2": 76,
+        "sys": 108,
+        "dia": 68,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "airway",
+            "oxygen"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Airway and ventilation assessment are essential; escalate respiratory support when indicated."
+    },
+    {
+        "condition": "Severe asthma exacerbation",
+        "symptoms": "Unable to finish sentences, wheeze, marked work of breathing.",
+        "hr": 132,
+        "spo2": 88,
+        "sys": 118,
+        "dia": 75,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "oxygen",
+            "broncho",
+            "airway"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": false,
+        "teaching": "Inhaled bronchodilator and oxygen titrated to need; assess for impending respiratory failure."
+    },
+    {
+        "condition": "COPD exacerbation with hypoxaemia",
+        "symptoms": "Breathlessness and wheeze; risk of hypercapnic respiratory failure.",
+        "hr": 115,
+        "spo2": 84,
+        "sys": 133,
+        "dia": 78,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "oxygen",
+            "broncho",
+            "airway"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Controlled oxygen with target saturation appropriate to hypercapnia risk; assess blood gases and NIV need."
+    },
+    {
+        "condition": "Anaphylactic shock",
+        "symptoms": "Sudden urticaria, airway swelling, wheeze and hypotension after exposure.",
+        "hr": 150,
+        "spo2": 82,
+        "sys": 70,
+        "dia": 40,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "epi",
+            "airway",
+            "oxygen",
+            "iv"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "IM epinephrine is first-line; airway management and IV fluid resuscitation as indicated."
+    },
+    {
+        "condition": "Septic shock",
+        "symptoms": "Suspected infection, altered mentation, hypotension and poor perfusion.",
+        "hr": 135,
+        "spo2": 88,
+        "sys": 78,
+        "dia": 45,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "oxygen",
+            "iv",
+            "antibiotics",
+            "pressor"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Early antibiotics, measured fluids and vasopressor if hypotension persists; seek source control."
+    },
+    {
+        "condition": "Haemorrhagic trauma shock",
+        "symptoms": "Major external bleeding, cool peripheries, profound hypotension.",
+        "hr": 146,
+        "spo2": 93,
+        "sys": 72,
+        "dia": 42,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "trauma",
+            "blood",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Control catastrophic haemorrhage and initiate blood-based resuscitation and definitive bleeding control."
+    },
+    {
+        "condition": "Severe dehydration / hypovolaemia",
+        "symptoms": "Vomiting, dry mucosa, tachycardia and low blood pressure.",
+        "hr": 125,
+        "spo2": 97,
+        "sys": 82,
+        "dia": 50,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "iv"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Assess fluid responsiveness and reassess perfusion after fluid therapy."
+    },
+    {
+        "condition": "Inferior STEMI with hypotension",
+        "symptoms": "Crushing chest pain, diaphoresis, hypotension; suspected myocardial infarction.",
+        "hr": 54,
+        "spo2": 94,
+        "sys": 88,
+        "dia": 58,
+        "rhythm": "SINUS BRADYCARDIA",
+        "required": [
+            "ecg12",
+            "reperfuse"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Obtain 12-lead ECG and arrange immediate reperfusion pathway; avoid reflexive fluid or oxygen in every patient."
+    },
+    {
+        "condition": "Anterior STEMI",
+        "symptoms": "Persistent central chest pain with diaphoresis.",
+        "hr": 112,
+        "spo2": 95,
+        "sys": 125,
+        "dia": 82,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "ecg12",
+            "reperfuse"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": false,
+        "teaching": "Rapid ECG recognition and urgent reperfusion referral."
+    },
+    {
+        "condition": "Unstable supraventricular tachycardia",
+        "symptoms": "Rapid regular narrow-complex tachycardia with hypotension and confusion.",
+        "hr": 180,
+        "spo2": 96,
+        "sys": 75,
+        "dia": 46,
+        "rhythm": "SVT",
+        "required": [
+            "monitor",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Unstable tachyarrhythmia needs synchronized cardioversion by trained clinicians."
+    },
+    {
+        "condition": "Symptomatic bradycardia",
+        "symptoms": "Heart rate 35/min, dizziness, confusion and poor perfusion.",
+        "hr": 35,
+        "spo2": 96,
+        "sys": 76,
+        "dia": 42,
+        "rhythm": "BRADYCARDIA",
+        "required": [
+            "monitor",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Assess instability and arrange appropriate atropine/pacing pathway."
+    },
+    {
+        "condition": "Hypoglycaemic emergency",
+        "symptoms": "Confusion, sweating and low point-of-care glucose.",
+        "hr": 119,
+        "spo2": 97,
+        "sys": 115,
+        "dia": 75,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "glucose"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": false,
+        "teaching": "Confirm glucose when feasible and treat promptly with appropriate glucose therapy."
+    },
+    {
+        "condition": "Opioid-induced respiratory depression",
+        "symptoms": "Pinpoint pupils, slow respirations and low SpO2.",
+        "hr": 52,
+        "spo2": 78,
+        "sys": 98,
+        "dia": 62,
+        "rhythm": "SINUS BRADYCARDIA",
+        "required": [
+            "airway",
+            "antidote"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Ventilation support is critical; administer naloxone when opioid toxicity is suspected."
+    },
+    {
+        "condition": "Organophosphate poisoning",
+        "symptoms": "Profuse secretions, wheeze, bradycardia and cholinergic symptoms.",
+        "hr": 48,
+        "spo2": 86,
+        "sys": 86,
+        "dia": 50,
+        "rhythm": "SINUS BRADYCARDIA",
+        "required": [
+            "airway",
+            "antidote"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "PPE/decontamination, airway management and atropine-based antidotal treatment."
+    },
+    {
+        "condition": "Tension pneumothorax",
+        "symptoms": "Trauma, severe dyspnoea, unilateral absent breath sounds and shock.",
+        "hr": 143,
+        "spo2": 84,
+        "sys": 74,
+        "dia": 42,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "oxygen",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Suspected tension pneumothorax requires immediate decompression by trained personnel."
+    },
+    {
+        "condition": "Acute pulmonary oedema",
+        "symptoms": "Severe dyspnoea, crackles and frothy sputum with hypertension.",
+        "hr": 129,
+        "spo2": 83,
+        "sys": 184,
+        "dia": 110,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "airway",
+            "oxygen",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Consider non-invasive ventilation and cause-directed management; avoid routine IV fluid boluses."
+    },
+    {
+        "condition": "Acute ischaemic stroke",
+        "symptoms": "Sudden facial droop, unilateral weakness and speech difficulty.",
+        "hr": 90,
+        "spo2": 97,
+        "sys": 150,
+        "dia": 90,
+        "rhythm": "SINUS RHYTHM",
+        "required": [
+            "glucose",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": false,
+        "teaching": "Check glucose, assess time last known well, activate stroke imaging and reperfusion assessment."
+    },
+    {
+        "condition": "Severe hyperkalaemia",
+        "symptoms": "Weakness, renal failure, ECG widening and bradyarrhythmia.",
+        "hr": 43,
+        "spo2": 95,
+        "sys": 88,
+        "dia": 50,
+        "rhythm": "WIDE QRS",
+        "required": [
+            "monitor",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Immediate ECG-guided calcium and potassium-shifting/removal strategy by trained clinicians."
+    },
+    {
+        "condition": "Diabetic ketoacidosis with shock",
+        "symptoms": "Kussmaul respirations, dehydration, hyperglycaemia and hypotension.",
+        "hr": 130,
+        "spo2": 96,
+        "sys": 83,
+        "dia": 52,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "glucose",
+            "iv",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Evaluate glucose, ketones and potassium; use protocol-directed fluids and insulin with monitoring."
+    },
+    {
+        "condition": "Massive pulmonary embolism",
+        "symptoms": "Sudden dyspnoea, syncope, severe hypotension and tachycardia.",
+        "hr": 144,
+        "spo2": 85,
+        "sys": 73,
+        "dia": 44,
+        "rhythm": "SINUS TACHYCARDIA",
+        "required": [
+            "oxygen",
+            "special"
+        ],
+        "timeLimit": 55,
+        "isCodeBlue": true,
+        "teaching": "Resuscitate and urgently evaluate reperfusion options for high-risk PE."
+    }
+];
+
+        const PATIENT_NAMES = [
+            'Alex Rivera, 34M', 'Maya Lin, 28F', 'Marcus Vance, 52M', 'Elena Rostova, 41F',
+            'David Okafor, 63M', 'Sophia Chen, 19F', 'Liam Gallagher, 47M', 'Nadia Al-Mansoor, 36F'
+        ];
+
+        /**
+         * ============================================================================
+         * GAME STATE & TELEMETRY LOOP
+         * ============================================================================
+         */
+        let gameState = {
+            isRunning: false,
+            shiftTimeRemaining: 120, // 2 minutes shift
+            score: 0,
+            multiplier: 1.0,
+            patientsSaved: 0,
+            patientsLost: 0,
+            patientCounter: 100,
+            currentPatient: null,
+            lastUrgentSecond: -1
+        };
+
+        let performanceLog = [];
+        let activeCaseLog = null;
+        let difficultyMode = 'medium';
+        let selectedCaseIndex = -1;
+        let lastCaseIndex = -1;
+        let caseSpawnTimeout = null;
+        let shiftInterval = null;
+        let vitalsInterval = null;
+        let heartbeatTimeout = null;
+
+        // ECG Canvas Variables
+        const canvas = document.getElementById('ecg-canvas');
+        const ctx = canvas.getContext('2d');
+        let ecgPoints = [];
+        let ecgPhase = 0;
+        let lastFrameTime = 0;
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            ecgPoints = new Array(Math.floor(canvas.width / 2)).fill(canvas.height / 2);
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        /**
+         * Starts a new ER shift
+         */
+        function startShift() {
+            audioEngine.init();
+            audioEngine.alarmSilenced = false;
+            audioEngine.stopAllContinuousAlarms();
+
+            clearTimeout(caseSpawnTimeout);
+            performanceLog = [];
+            activeCaseLog = null;
+            difficultyMode = document.getElementById('difficulty').value;
+            document.getElementById('difficulty').disabled = true;
+            document.getElementById('advanced-report').classList.add('hidden');
+            gameState = {
+                isRunning: true,
+                shiftTimeRemaining: difficultyMode === 'easy' ? 240 : difficultyMode === 'hard' ? 150 : 180,
+                score: 0,
+                multiplier: 1.0,
+                patientsSaved: 0,
+                patientsLost: 0,
+                patientCounter: 100,
+                currentPatient: null,
+                lastUrgentSecond: -1
+            };
+
+            document.getElementById('overlay-screen').classList.add('hidden');
+            document.getElementById('summary-stats').classList.add('hidden');
+            document.getElementById('shift-badge').textContent = 'ACTIVE SHIFT';
+            document.getElementById('shift-badge').className = 'text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse';
+
+            setToolsEnabled(true);
+            updateHUD();
+            spawnNextPatient();
+
+            clearInterval(shiftInterval);
+            shiftInterval = setInterval(() => {
+                if (!gameState.isRunning) return;
+                gameState.shiftTimeRemaining--;
+                updateHUD();
+                if (gameState.shiftTimeRemaining <= 0) {
+                    endShift();
+                }
+            }, 1000);
+
+            clearInterval(vitalsInterval);
+            vitalsInterval = setInterval(tickPatientVitals, 100);
+        }
+
+        /**
+         * Spawns a new critical patient into Trauma Bay 01
+         */
+        function spawnNextPatient() {
+            if (!gameState.isRunning) return;
+            audioEngine.stopAllContinuousAlarms();
+            audioEngine.alarmSilenced = false;
+            gameState.lastUrgentSecond = -1;
+
+            let index = Math.floor(Math.random() * CASE_TEMPLATES.length);
+            if (index === lastCaseIndex) index = (index + 1) % CASE_TEMPLATES.length;
+            lastCaseIndex = index;
+            const template = CASE_TEMPLATES[index];
+            const name = PATIENT_NAMES[Math.floor(Math.random() * PATIENT_NAMES.length)];
+            gameState.patientCounter++;
+
+            // Slight difficulty scaling as score increases
+            const timePenalty = difficultyMode === 'hard' ? 20 : difficultyMode === 'easy' ? -25 : 0;
+
+            gameState.currentPatient = {
+                id: `PT-#${gameState.patientCounter}`,
+                name: name,
+                condition: template.condition,
+                symptoms: template.symptoms,
+                hr: template.hr,
+                spo2: template.spo2,
+                sys: template.sys,
+                dia: template.dia,
+                rhythm: template.rhythm,
+                required: [...template.required],
+                completed: [],
+                maxTime: Math.max(10, template.timeLimit - timePenalty),
+                timeRemaining: Math.max(10, template.timeLimit - timePenalty),
+                isCodeBlue: template.isCodeBlue,
+                teaching: template.teaching
+            };
+
+            activeCaseLog = {condition: template.condition, actions: [], mistakes: [], outcome:'', teaching: template.teaching};
+            renderPatientUI();
+            triggerAlarmCheck();
+            scheduleNextHeartbeat();
+        }
+
+        /**
+         * Updates patient timer and vital deterioration every 100ms
+         */
+        function tickPatientVitals() {
+            const p = gameState.currentPatient;
+            if (!gameState.isRunning || !p) return;
+
+            p.timeRemaining = Math.max(0, p.timeRemaining - 0.1);
+
+            // Gradual vital deterioration if untreated
+            if (p.hr > 0 && Math.random() < 0.15) {
+                p.hr = Math.min(185, p.hr + 1);
+            }
+            if (p.spo2 > 60 && !p.completed.includes('oxygen') && !p.completed.includes('airway') && Math.random() < 0.12) {
+                p.spo2 = Math.max(60, p.spo2 - 1);
+            }
+            if (p.sys > 45 && !p.completed.includes('iv') && !p.completed.includes('blood') && !p.completed.includes('pressor') && Math.random() < 0.12) {
+                p.sys = Math.max(45, p.sys - 1);
+                p.dia = Math.max(25, p.dia - 1);
+            }
+
+            // Urgent countdown beep in final 5 seconds
+            const ceilSec = Math.ceil(p.timeRemaining);
+            if (ceilSec <= 5 && ceilSec > 0 && ceilSec !== gameState.lastUrgentSecond) {
+                gameState.lastUrgentSecond = ceilSec;
+                audioEngine.playUrgentTimerBeep();
+            }
+
+            updateVitalsUI();
+            triggerAlarmCheck();
+
+            if (p.timeRemaining <= 0) {
+                handlePatientLost();
+            }
+        }
+
+        /**
+         * Evaluates critical vitals and triggers visual + Web Audio API alarms
+         */
+        function triggerAlarmCheck() {
+            const p = gameState.currentPatient;
+            if (!p) return;
+
+            const isFlatline = p.hr === 0 && p.rhythm === 'ASYSTOLE';
+            const isCritical = p.hr === 0 || p.spo2 < 88 || p.sys < 85 || p.timeRemaining < 6;
+
+            const frame = document.getElementById('main-monitor-frame');
+            const banner = document.getElementById('alert-banner');
+            const bannerText = document.getElementById('alert-banner-text');
+            const ackBtn = document.getElementById('ack-alarm-btn');
+
+            if (isCritical) {
+                frame.classList.add('emergency-active');
+                banner.classList.remove('hidden');
+
+                if (isFlatline) {
+                    bannerText.textContent = 'CODE BLUE — ASYSTOLE (NON-SHOCKABLE)!';
+                    audioEngine.startFlatline();
+                } else {
+                    bannerText.textContent = 'CRITICAL VITALS ALARM — IMMEDIATE INTERVENTION REQUIRED';
+                    audioEngine.startCodeBlueAlarm();
+                }
+
+                if (!audioEngine.alarmSilenced && !audioEngine.isMuted) {
+                    ackBtn.classList.remove('hidden');
+                } else {
+                    ackBtn.classList.add('hidden');
+                }
+            } else {
+                frame.classList.remove('emergency-active');
+                banner.classList.add('hidden');
+                ackBtn.classList.add('hidden');
+                audioEngine.stopAllContinuousAlarms();
+            }
+        }
+
+        /**
+         * Schedules realistic ECG audio pips synced to the patient's live BPM
+         */
+        function scheduleNextHeartbeat() {
+            clearTimeout(heartbeatTimeout);
+            if (!gameState.isRunning || !gameState.currentPatient) return;
+
+            const p = gameState.currentPatient;
+            if (p.hr > 0) {
+                const isCrit = p.hr > 130 || p.spo2 < 88;
+                audioEngine.playHeartbeatPip(p.spo2, isCrit);
+
+                // Pulse heart icon visually
+                const heartIcon = document.getElementById('hr-heart-icon');
+                heartIcon.style.transform = 'scale(1.4)';
+                setTimeout(() => { heartIcon.style.transform = 'scale(1)'; }, 100);
+
+                const intervalMs = Math.max(280, Math.min(1200, 60000 / p.hr));
+                heartbeatTimeout = setTimeout(scheduleNextHeartbeat, intervalMs);
+            } else {
+                // Re-check every 300ms while in cardiac arrest
+                heartbeatTimeout = setTimeout(scheduleNextHeartbeat, 300);
+            }
+        }
+
+        /**
+         * Player applies a medical treatment from the crash cart
+         */
+        function applyTreatment(toolKey) {
+            const p = gameState.currentPatient;
+            if (!gameState.isRunning || !p) return;
+            const expected = p.required[p.completed.length];
+            const isRequired = p.required.includes(toolKey);
+            if (p.completed.includes(toolKey)) {
+                showFeedback(`${TOOL_LABELS[toolKey]} already completed.`, 'text-amber-400');
+                return;
+            }
+            if (toolKey !== expected) {
+                const isUnsafe = (toolKey === 'defib' && ['ASYSTOLE','PEA'].includes(p.rhythm)) || (toolKey === 'iv' && p.condition.includes('pulmonary oedema'));
+                const msg = isUnsafe ? `Unsafe action: ${TOOL_LABELS[toolKey]} is not indicated for this presentation.` : isRequired ? `Sequence reminder: first consider ${TOOL_LABELS[expected]}.` : `Not indicated in this simplified scenario: ${TOOL_LABELS[toolKey]}.`;
+                activeCaseLog.mistakes.push(msg);
+                activeCaseLog.actions.push('✗ ' + TOOL_LABELS[toolKey]);
+                audioEngine.playErrorBuzz();
+                p.timeRemaining = Math.max(1, p.timeRemaining - (difficultyMode === 'hard' ? 7 : 3));
+                gameState.multiplier = 1.0;
+                updateHUD();
+                showFeedback(msg, 'text-rose-400');
+                return;
+            }
+            p.completed.push(toolKey);
+            activeCaseLog.actions.push('✓ ' + TOOL_LABELS[toolKey]);
+            if (toolKey === 'defib') {
+                audioEngine.playDefibShock();
+                audioEngine.stopAllContinuousAlarms();
+                // This is a simplified simulation of a successful shock, not a clinical prediction.
+                p.hr = 92; p.sys = 108; p.dia = 68; p.rhythm = 'POST-SHOCK ORGANIZED RHYTHM';
+            } else audioEngine.playSuccessChime(false);
+            if (toolKey === 'oxygen' || toolKey === 'airway') p.spo2 = Math.max(p.spo2, 95);
+            if (toolKey === 'iv' && !p.condition.includes('pulmonary oedema')) {p.sys = Math.max(p.sys, 94); p.dia = Math.max(p.dia, 55);}
+            if (toolKey === 'epi' && p.condition.includes('Anaphylactic')) {p.sys = 110; p.dia = 70;}
+            if (toolKey === 'blood' || toolKey === 'pressor' || toolKey === 'special') {p.sys = Math.max(p.sys, 102); p.dia = Math.max(p.dia, 62);}
+            if (toolKey === 'broncho') p.spo2 = Math.max(p.spo2, 94);
+            if (toolKey === 'glucose') p.hr = p.hr || 88;
+            showFeedback(`Completed: ${TOOL_LABELS[toolKey]} • ${p.completed.length}/${p.required.length} actions`, 'text-emerald-400');
+            renderPatientUI(); updateVitalsUI(); triggerAlarmCheck();
+            if (p.completed.length === p.required.length) handlePatientStabilized();
+        }
+
+        function handlePatientStabilized() {
+            const p = gameState.currentPatient;
+            audioEngine.stopAllContinuousAlarms();
+            audioEngine.playSuccessChime(true);
+
+            const timeBonus = Math.round(p.timeRemaining * 15);
+            const pointsEarned = Math.round((250 + timeBonus) * gameState.multiplier);
+
+            gameState.score += pointsEarned;
+            gameState.patientsSaved++;
+            if (activeCaseLog) { activeCaseLog.outcome = 'Stabilized (simulated)'; activeCaseLog.points = pointsEarned; performanceLog.push(activeCaseLog); activeCaseLog = null; }
+            gameState.multiplier = Math.min(3.0, +(gameState.multiplier + 0.25).toFixed(2));
+
+            showFeedback(`PATIENT STABILIZED! +${pointsEarned} PTS`, 'text-emerald-300 font-bold');
+            updateHUD();
+
+            gameState.currentPatient = null;
+            caseSpawnTimeout = setTimeout(spawnNextPatient, 850);
+        }
+
+        function handlePatientLost() {
+            audioEngine.stopAllContinuousAlarms();
+            audioEngine.playErrorBuzz();
+
+            gameState.patientsLost++;
+            if (activeCaseLog) { activeCaseLog.outcome = 'Time expired'; activeCaseLog.points = 0; performanceLog.push(activeCaseLog); activeCaseLog = null; }
+            gameState.multiplier = 1.0;
+
+            showFeedback(`CRITICAL FAILURE — Patient transferred to surgical ICU.`, 'text-rose-400 font-bold');
+            updateHUD();
+
+            gameState.currentPatient = null;
+            caseSpawnTimeout = setTimeout(spawnNextPatient, 1000);
+        }
+
+        function endShift() {
+            gameState.isRunning = false;
+            clearTimeout(caseSpawnTimeout);
+            if (activeCaseLog) { activeCaseLog.outcome = 'Shift ended before completion'; activeCaseLog.points = 0; performanceLog.push(activeCaseLog); activeCaseLog = null; }
+            document.getElementById('difficulty').disabled = false;
+            clearInterval(shiftInterval);
+            clearInterval(vitalsInterval);
+            clearTimeout(heartbeatTimeout);
+            audioEngine.stopAllContinuousAlarms();
+            setToolsEnabled(false);
+
+            document.getElementById('main-monitor-frame').classList.remove('emergency-active');
+            document.getElementById('alert-banner').classList.add('hidden');
+            document.getElementById('ack-alarm-btn').classList.add('hidden');
+            document.getElementById('shift-badge').textContent = 'SHIFT COMPLETE';
+            document.getElementById('shift-badge').className = 'text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700';
+
+            document.getElementById('overlay-badge').textContent = 'Shift Report';
+            document.getElementById('overlay-title').textContent = 'ER SHIFT COMPLETE';
+            document.getElementById('overlay-desc').textContent = 'Your trauma bay telemetry shift has concluded. Review your clinical performance below:';
+
+            document.getElementById('final-saved').textContent = gameState.patientsSaved;
+            document.getElementById('final-lost').textContent = gameState.patientsLost;
+            document.getElementById('final-score').textContent = gameState.score;
+            document.getElementById('summary-stats').classList.remove('hidden');
+            const report = document.getElementById('advanced-report');
+            const reportBody = document.getElementById('report-body');
+            reportBody.replaceChildren();
+            const totalErrors = performanceLog.reduce((n, c) => n + c.mistakes.length, 0);
+            const summary = document.createElement('p');
+            summary.textContent = `Difficulty: ${difficultyMode.toUpperCase()} • Cases: ${performanceLog.length} • Incorrect / out-of-sequence actions: ${totalErrors}`;
+            reportBody.appendChild(summary);
+            performanceLog.forEach((item, idx) => {
+                const box = document.createElement('div'); box.className = 'border-t border-slate-700 pt-2';
+                const title = document.createElement('p'); title.className = 'font-semibold text-white';
+                title.textContent = `${idx+1}. ${item.condition} — ${item.outcome}`; box.appendChild(title);
+                const steps = document.createElement('p'); steps.textContent = `Actions: ${item.actions.join(' → ') || 'None'}`; box.appendChild(steps);
+                const errors = document.createElement('p'); errors.className = 'text-rose-300'; errors.textContent = item.mistakes.length ? `Review: ${item.mistakes.join(' | ')}` : 'No incorrect selections recorded'; box.appendChild(errors);
+                const teaching = document.createElement('p'); teaching.className = 'text-sky-300 mt-1'; teaching.textContent = `Learning point: ${item.teaching}`; box.appendChild(teaching);
+                reportBody.appendChild(box);
+            });
+            report.classList.remove('hidden');
+
+            document.getElementById('start-game-btn').textContent = 'Start Next Shift';
+            document.getElementById('overlay-screen').classList.remove('hidden');
+        }
+
+        /**
+         * ============================================================================
+         * UI RENDERING & CONTROLS
+         * ============================================================================
+         */
+        function renderPatientUI() {
+            const p = gameState.currentPatient;
+            if (!p) return;
+
+            document.getElementById('patient-id').textContent = p.id;
+            document.getElementById('patient-name').textContent = p.name;
+            document.getElementById('patient-condition').textContent = difficultyMode === 'easy' ? `Diagnosis: ${p.condition}` : 'Clinical presentation: assess and intervene';
+            document.getElementById('patient-symptoms').textContent = p.symptoms;
+            document.getElementById('ecg-rhythm-label').textContent = `RHYTHM: ${p.rhythm}`;
+
+            const checklist = document.getElementById('treatment-checklist');
+            checklist.innerHTML = '';
+            const showHints = document.getElementById('show-hints').checked && difficultyMode !== 'hard';
+            if (!showHints) {
+                const hint = document.createElement('span'); hint.className = 'text-xs text-slate-400';
+                hint.textContent = `Hints hidden • ${p.completed.length}/${p.required.length} actions completed`;
+                checklist.appendChild(hint);
+            }
+            p.required.forEach(toolKey => {
+                if (!showHints && !p.completed.includes(toolKey)) return;
+                const isDone = p.completed.includes(toolKey);
+                const badge = document.createElement('span');
+                badge.className = isDone
+                    ? 'text-xs font-semibold px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 line-through'
+                    : 'text-xs font-semibold px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40';
+                badge.textContent = (isDone ? '✓ ' : '• ') + TOOL_LABELS[toolKey];
+                checklist.appendChild(badge);
+            });
+
+            updateVitalsUI();
+        }
+
+        function updateVitalsUI() {
+            const p = gameState.currentPatient;
+            if (!p) return;
+
+            const timerEl = document.getElementById('patient-timer');
+            timerEl.textContent = `${p.timeRemaining.toFixed(1)}s`;
+            timerEl.className = p.timeRemaining <= 6
+                ? 'font-mono-med text-xl sm:text-2xl font-extrabold text-rose-500 animate-pulse'
+                : 'font-mono-med text-xl sm:text-2xl font-extrabold text-amber-400';
+
+            const hrEl = document.getElementById('vital-hr');
+            hrEl.textContent = p.hr === 0 ? '00' : p.hr;
+            hrEl.className = (p.hr === 0 || p.hr > 130)
+                ? 'font-mono-med text-2xl sm:text-4xl font-extrabold text-rose-500 tracking-tight my-0.5'
+                : 'font-mono-med text-2xl sm:text-4xl font-extrabold text-emerald-400 tracking-tight my-0.5';
+
+            const spo2El = document.getElementById('vital-spo2');
+            spo2El.textContent = p.spo2;
+            spo2El.className = p.spo2 < 90
+                ? 'font-mono-med text-2xl sm:text-4xl font-extrabold text-rose-500 tracking-tight my-0.5'
+                : 'font-mono-med text-2xl sm:text-4xl font-extrabold text-cyan-400 tracking-tight my-0.5';
+
+            const bpEl = document.getElementById('vital-bp');
+            bpEl.textContent = `${p.sys}/${p.dia}`;
+            bpEl.className = p.sys < 90
+                ? 'font-mono-med text-xl sm:text-3xl font-extrabold text-rose-500 tracking-tight my-0.5'
+                : 'font-mono-med text-xl sm:text-3xl font-extrabold text-amber-400 tracking-tight my-0.5';
+        }
+
+        function updateHUD() {
+            const mins = Math.floor(gameState.shiftTimeRemaining / 60).toString().padStart(2, '0');
+            const secs = (gameState.shiftTimeRemaining % 60).toString().padStart(2, '0');
+            document.getElementById('shift-timer').textContent = `${mins}:${secs}`;
+            document.getElementById('patients-saved').textContent = gameState.patientsSaved;
+            document.getElementById('score-display').textContent = gameState.score;
+            document.getElementById('multiplier-badge').textContent = `${gameState.multiplier.toFixed(2)}x`;
+        }
+
+        function showFeedback(msg, colorClass) {
+            const el = document.getElementById('feedback-toast');
+            el.textContent = msg;
+            el.className = `mt-2 text-xs font-medium min-h-[18px] ${colorClass}`;
+        }
+
+        function setToolsEnabled(enabled) {
+            const ids = ['btn-defib', 'btn-oxygen', 'btn-iv', 'btn-epi', 'btn-trauma', 'btn-antibiotics', 'btn-cpr', 'btn-airway', 'btn-monitor', 'btn-amio', 'btn-glucose', 'btn-blood', 'btn-pressor', 'btn-ecg12', 'btn-reperfuse', 'btn-antidote', 'btn-broncho', 'btn-special'];
+            ids.forEach(id => {
+                document.getElementById(id).disabled = !enabled;
+            });
+        }
+
+        function toggleMute() {
+            audioEngine.init();
+            const nextMute = !audioEngine.isMuted;
+            audioEngine.setMute(nextMute);
+            document.getElementById('mute-icon').textContent = nextMute ? '🔇' : '🔊';
+            document.getElementById('mute-text').textContent = nextMute ? 'Muted' : 'Audio On';
+            if (!nextMute) {
+                triggerAlarmCheck();
+            }
+        }
+
+        function acknowledgeAlarm() {
+            audioEngine.silenceCurrentAlarm();
+            document.getElementById('ack-alarm-btn').classList.add('hidden');
+            showFeedback('Alarm silenced for current emergency.', 'text-amber-300');
+        }
+
+        // Keyboard shortcuts for fast ER doctor actions
+        window.addEventListener('keydown', (e) => {
+            if (!gameState.isRunning) return;
+            const keyMap = {
+                '1': 'defib',
+                '2': 'oxygen',
+                '3': 'iv',
+                '4': 'epi',
+                '5': 'trauma',
+                '6': 'antibiotics'
+            };
+            if (keyMap[e.key]) {
+                applyTreatment(keyMap[e.key]);
+            } else if (e.code === 'Space') {
+                e.preventDefault();
+                acknowledgeAlarm();
+            }
+        });
+
+        /**
+         * ============================================================================
+         * REAL-TIME ECG OSCILLOSCOPE ANIMATION LOOP
+         * ============================================================================
+         */
+        function getECGSample(phase, hr) {
+            if (hr === 0) {
+                const rhythm = gameState.currentPatient?.rhythm || '';
+                if (rhythm === 'ASYSTOLE') return (Math.random() - 0.5) * 0.7;
+                if (rhythm === 'PEA') return -Math.sin(phase * 6) * 8;
+                return (Math.sin(phase * 19) * 14 + Math.cos(phase * 31) * 9);
+            }
+            // Normalized heartbeat cycle [0..1]
+            const t = phase % 1;
+            // P wave
+            if (t > 0.1 && t < 0.2) {
+                return -Math.sin(((t - 0.1) / 0.1) * Math.PI) * 8;
+            }
+            // Q dip
+            if (t >= 0.28 && t < 0.31) {
+                return ((t - 0.28) / 0.03) * 10;
+            }
+            // R peak (sharp spike)
+            if (t >= 0.31 && t < 0.35) {
+                return 10 - Math.sin(((t - 0.31) / 0.04) * Math.PI) * 52;
+            }
+            // S dip
+            if (t >= 0.35 && t < 0.39) {
+                return Math.sin(((t - 0.35) / 0.04) * Math.PI) * 16;
+            }
+            // T wave
+            if (t > 0.52 && t < 0.68) {
+                return -Math.sin(((t - 0.52) / 0.16) * Math.PI) * 12;
+            }
+            return (Math.random() - 0.5) * 1.2;
+        }
+
+        function animateECG(timestamp) {
+            if (!lastFrameTime) lastFrameTime = timestamp;
+            const dt = (timestamp - lastFrameTime) / 1000;
+            lastFrameTime = timestamp;
+
+            const w = canvas.width;
+            const h = canvas.height;
+            const midY = h / 2;
+
+            const p = gameState.currentPatient;
+            const hr = (gameState.isRunning && p) ? p.hr : 72;
+            const beatsPerSec = hr === 0 ? 1.5 : hr / 60;
+
+            ecgPhase += dt * beatsPerSec;
+            const sampleOffset = getECGSample(ecgPhase, hr);
+
+            ecgPoints.push(midY + sampleOffset);
+            if (ecgPoints.length > Math.floor(w / 2)) {
+                ecgPoints.shift();
+            }
+
+            ctx.clearRect(0, 0, w, h);
+
+            // Stroke color switches to crimson red during critical arrest/alarm
+            const isDanger = gameState.isRunning && p && (p.hr === 0 || p.spo2 < 88 || p.sys < 85);
+            ctx.strokeStyle = isDanger ? '#ef4444' : '#10b981';
+            ctx.lineWidth = 2.5;
+            ctx.lineJoin = 'round';
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = isDanger ? 'rgba(239, 68, 68, 0.7)' : 'rgba(16, 185, 129, 0.7)';
+
+            ctx.beginPath();
+            for (let i = 0; i < ecgPoints.length; i++) {
+                const x = i * 2;
+                const y = ecgPoints[i];
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Glowing leading beam dot
+            if (ecgPoints.length > 0) {
+                const lastX = (ecgPoints.length - 1) * 2;
+                const lastY = ecgPoints[ecgPoints.length - 1];
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            requestAnimationFrame(animateECG);
+        }
+
+        document.getElementById('show-hints').addEventListener('change', () => { if (gameState.currentPatient) renderPatientUI(); });
+        window.onload = function () {
+            resizeCanvas();
+            requestAnimationFrame(animateECG);
+        };
+    </script>
+</body>
+</html>
